@@ -8,6 +8,7 @@
 #include <atomic>
 #include <queue>
 #include <condition_variable>
+#include <chrono>
 
 // Forward declarations for FFmpeg types
 struct AVFormatContext;
@@ -38,6 +39,32 @@ struct StreamInfo {
     int bitrate = 0;
 };
 
+struct DecodeStats {
+    // Decoding method
+    std::string decoderName;           // Full decoder name (e.g., "h264", "h264_cuvid")
+    bool isHardwareAccelerated = false;
+    std::string hwAccelType;           // "None", "CUDA", "DXVA2", "D3D11VA", etc.
+
+    // Timing stats (in microseconds)
+    double avgDecodeTimeUs = 0.0;
+    double minDecodeTimeUs = 0.0;
+    double maxDecodeTimeUs = 0.0;
+    double lastDecodeTimeUs = 0.0;
+
+    // Frame stats
+    uint64_t framesDecoded = 0;
+    uint64_t framesDropped = 0;
+    double actualFps = 0.0;            // Measured output FPS
+
+    // Queue stats
+    size_t queueDepth = 0;
+    size_t maxQueueSize = 0;
+
+    // Network/demux stats
+    double avgDemuxTimeUs = 0.0;
+    double avgConvertTimeUs = 0.0;     // RGB conversion time
+};
+
 class VideoDecoder {
 public:
     VideoDecoder();
@@ -54,6 +81,9 @@ public:
     // Get stream information
     const StreamInfo& getStreamInfo() const { return streamInfo_; }
     std::string getLastError() const { return lastError_; }
+
+    // Get decode statistics (thread-safe copy)
+    DecodeStats getDecodeStats() const;
 
 private:
     void decodeThread();
@@ -76,6 +106,14 @@ private:
     std::mutex queueMutex_;
     std::condition_variable queueCv_;
     static constexpr size_t MAX_QUEUE_SIZE = 4;
+
+    // Decode statistics
+    DecodeStats decodeStats_;
+    mutable std::mutex statsMutex_;
+    std::chrono::steady_clock::time_point statsStartTime_;
+    double totalDecodeTimeUs_ = 0.0;
+    double totalDemuxTimeUs_ = 0.0;
+    double totalConvertTimeUs_ = 0.0;
 };
 
 } // namespace latency

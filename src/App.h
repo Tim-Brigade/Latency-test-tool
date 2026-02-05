@@ -38,6 +38,7 @@ private:
     void renderUI();
     void renderStatusBar();
     void renderPauseOverlay();
+    void renderStatsPanel();
     void renderInputField(int x, int y, int width, int height,
                           const std::string& label, const std::string& value, bool active);
     void renderButton(int x, int y, int width, int height,

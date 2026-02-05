@@ -237,6 +237,9 @@ void App::render() {
         contentHeight
     );
 
+    // Stats panel (before pause overlay so it's visible when not paused)
+    renderStatsPanel();
+
     // Pause overlay
     if (paused_) {
         renderPauseOverlay();
@@ -450,6 +453,111 @@ void App::renderPauseOverlay() {
     renderTextCentered(diffText.str(), videoX + videoWidth / 2, infoY + 260, cyan);
 
     renderTextCentered("[SPACE] to unpause  |  [S] screenshot", videoX + videoWidth / 2, videoY + videoHeight - 40, white);
+}
+
+void App::renderStatsPanel() {
+    if (state_ == AppState::Disconnected || state_ == AppState::Connecting) {
+        return;  // No stats to show
+    }
+
+    auto stats = videoDecoder_->getDecodeStats();
+    const auto& streamInfo = videoDecoder_->getStreamInfo();
+
+    // Stats panel position - bottom right corner, above status bar
+    const int panelWidth = 280;
+    const int lineHeight = 18;
+    const int padding = 8;
+    int numLines = 11;
+    const int panelHeight = lineHeight * numLines + padding * 2;
+    const int panelX = config_.windowWidth - panelWidth - padding;
+    const int panelY = config_.windowHeight - 30 - panelHeight - padding;
+
+    // Semi-transparent background
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 200);
+    SDL_Rect panelRect = {panelX, panelY, panelWidth, panelHeight};
+    SDL_RenderFillRect(renderer_, &panelRect);
+
+    // Border
+    SDL_SetRenderDrawColor(renderer_, 80, 80, 100, 255);
+    SDL_RenderDrawRect(renderer_, &panelRect);
+
+    // Render stats text
+    SDL_Color headerColor = {100, 200, 255, 255};
+    SDL_Color labelColor = {180, 180, 180, 255};
+    SDL_Color valueColor = {255, 255, 255, 255};
+    SDL_Color greenColor = {100, 255, 100, 255};
+    SDL_Color yellowColor = {255, 255, 100, 255};
+
+    int y = panelY + padding;
+    int labelX = panelX + padding;
+    int valueX = panelX + 140;
+
+    // Header
+    renderText("DECODE STATS", labelX, y, headerColor);
+    y += lineHeight + 4;
+
+    // Decoder info
+    renderText("Decoder:", labelX, y, labelColor);
+    renderText(stats.decoderName, valueX, y, valueColor);
+    y += lineHeight;
+
+    // Hardware acceleration
+    renderText("Accel:", labelX, y, labelColor);
+    SDL_Color accelColor = stats.isHardwareAccelerated ? greenColor : yellowColor;
+    renderText(stats.hwAccelType, valueX, y, accelColor);
+    y += lineHeight;
+
+    // Resolution
+    renderText("Resolution:", labelX, y, labelColor);
+    std::string resStr = std::to_string(streamInfo.width) + "x" + std::to_string(streamInfo.height);
+    renderText(resStr, valueX, y, valueColor);
+    y += lineHeight;
+
+    // FPS
+    renderText("FPS (actual):", labelX, y, labelColor);
+    std::ostringstream fpsStr;
+    fpsStr << std::fixed << std::setprecision(1) << stats.actualFps;
+    renderText(fpsStr.str(), valueX, y, valueColor);
+    y += lineHeight;
+
+    // Decode time
+    renderText("Decode time:", labelX, y, labelColor);
+    std::ostringstream decodeStr;
+    decodeStr << std::fixed << std::setprecision(1) << (stats.avgDecodeTimeUs / 1000.0) << " ms";
+    renderText(decodeStr.str(), valueX, y, valueColor);
+    y += lineHeight;
+
+    // Convert time (RGB conversion)
+    renderText("RGB convert:", labelX, y, labelColor);
+    std::ostringstream convertStr;
+    convertStr << std::fixed << std::setprecision(2) << (stats.avgConvertTimeUs / 1000.0) << " ms";
+    renderText(convertStr.str(), valueX, y, valueColor);
+    y += lineHeight;
+
+    // Total processing time
+    double totalMs = (stats.avgDecodeTimeUs + stats.avgConvertTimeUs) / 1000.0;
+    renderText("Total process:", labelX, y, labelColor);
+    std::ostringstream totalStr;
+    totalStr << std::fixed << std::setprecision(1) << totalMs << " ms";
+    renderText(totalStr.str(), valueX, y, valueColor);
+    y += lineHeight;
+
+    // Frames decoded/dropped
+    renderText("Frames:", labelX, y, labelColor);
+    std::ostringstream frameStr;
+    frameStr << stats.framesDecoded;
+    if (stats.framesDropped > 0) {
+        frameStr << " (" << stats.framesDropped << " dropped)";
+    }
+    SDL_Color frameColor = stats.framesDropped > 0 ? yellowColor : valueColor;
+    renderText(frameStr.str(), valueX, y, frameColor);
+    y += lineHeight;
+
+    // Queue depth
+    renderText("Queue:", labelX, y, labelColor);
+    std::string queueStr = std::to_string(stats.queueDepth) + "/" + std::to_string(stats.maxQueueSize);
+    renderText(queueStr, valueX, y, valueColor);
 }
 
 void App::renderStatusBar() {

@@ -158,6 +158,48 @@ bool VideoDecoder::openCodec() {
         return false;
     }
 
+    // Initialize decode statistics
+    {
+        std::lock_guard<std::mutex> lock(statsMutex_);
+        decodeStats_ = DecodeStats{};
+        decodeStats_.decoderName = codec->name;
+        decodeStats_.maxQueueSize = MAX_QUEUE_SIZE;
+
+        // Detect hardware acceleration type
+        decodeStats_.isHardwareAccelerated = false;
+        decodeStats_.hwAccelType = "Software";
+
+        // Check if this is a hardware decoder by name convention
+        std::string codecName = codec->name;
+        if (codecName.find("cuvid") != std::string::npos ||
+            codecName.find("nvdec") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "NVIDIA CUDA/NVDEC";
+        } else if (codecName.find("qsv") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "Intel QuickSync";
+        } else if (codecName.find("d3d11va") != std::string::npos ||
+                   codecName.find("dxva2") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "DirectX VA";
+        } else if (codecName.find("vaapi") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "VA-API";
+        } else if (codecName.find("videotoolbox") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "VideoToolbox";
+        } else if (codecName.find("amf") != std::string::npos) {
+            decodeStats_.isHardwareAccelerated = true;
+            decodeStats_.hwAccelType = "AMD AMF";
+        }
+
+        // Reset timing accumulators
+        totalDecodeTimeUs_ = 0.0;
+        totalDemuxTimeUs_ = 0.0;
+        totalConvertTimeUs_ = 0.0;
+        statsStartTime_ = std::chrono::steady_clock::now();
+    }
+
     // Initialize scaler for RGB conversion
     swsCtx_ = sws_getContext(
         codecCtx_->width, codecCtx_->height, codecCtx_->pix_fmt,
@@ -222,6 +264,9 @@ void VideoDecoder::decodeThread() {
     }
 
     while (running_) {
+        // Measure demux time
+        auto demuxStart = std::chrono::steady_clock::now();
+
         // Read packet
         int ret = av_read_frame(formatCtx_, packet);
         if (ret < 0) {
@@ -233,11 +278,17 @@ void VideoDecoder::decodeThread() {
             break;
         }
 
+        auto demuxEnd = std::chrono::steady_clock::now();
+        double demuxTimeUs = std::chrono::duration<double, std::micro>(demuxEnd - demuxStart).count();
+
         // Skip non-video packets
         if (packet->stream_index != videoStreamIndex_) {
             av_packet_unref(packet);
             continue;
         }
+
+        // Measure decode time
+        auto decodeStart = std::chrono::steady_clock::now();
 
         // Send packet to decoder
         ret = avcodec_send_packet(codecCtx_, packet);
@@ -257,19 +308,73 @@ void VideoDecoder::decodeThread() {
                 break;
             }
 
+            auto decodeEnd = std::chrono::steady_clock::now();
+            double decodeTimeUs = std::chrono::duration<double, std::micro>(decodeEnd - decodeStart).count();
+
+            // Measure RGB conversion time
+            auto convertStart = std::chrono::steady_clock::now();
+
             // Convert frame to RGB
             auto videoFrame = convertFrame(frame);
+
+            auto convertEnd = std::chrono::steady_clock::now();
+            double convertTimeUs = std::chrono::duration<double, std::micro>(convertEnd - convertStart).count();
+
             if (videoFrame) {
                 std::unique_lock<std::mutex> lock(queueMutex_);
 
+                bool dropped = false;
                 // Wait if queue is full (discard old frames for low latency)
                 while (frameQueue_.size() >= MAX_QUEUE_SIZE && running_) {
                     frameQueue_.pop();  // Drop oldest frame
+                    dropped = true;
                 }
 
+                size_t currentQueueDepth = frameQueue_.size();
                 frameQueue_.push(std::move(videoFrame));
                 lock.unlock();
                 queueCv_.notify_one();
+
+                // Update statistics
+                {
+                    std::lock_guard<std::mutex> statsLock(statsMutex_);
+                    decodeStats_.framesDecoded++;
+                    if (dropped) {
+                        decodeStats_.framesDropped++;
+                    }
+
+                    // Update timing stats
+                    totalDecodeTimeUs_ += decodeTimeUs;
+                    totalDemuxTimeUs_ += demuxTimeUs;
+                    totalConvertTimeUs_ += convertTimeUs;
+
+                    decodeStats_.lastDecodeTimeUs = decodeTimeUs;
+                    decodeStats_.avgDecodeTimeUs = totalDecodeTimeUs_ / decodeStats_.framesDecoded;
+                    decodeStats_.avgDemuxTimeUs = totalDemuxTimeUs_ / decodeStats_.framesDecoded;
+                    decodeStats_.avgConvertTimeUs = totalConvertTimeUs_ / decodeStats_.framesDecoded;
+
+                    // Track min/max
+                    if (decodeStats_.framesDecoded == 1) {
+                        decodeStats_.minDecodeTimeUs = decodeTimeUs;
+                        decodeStats_.maxDecodeTimeUs = decodeTimeUs;
+                    } else {
+                        if (decodeTimeUs < decodeStats_.minDecodeTimeUs) {
+                            decodeStats_.minDecodeTimeUs = decodeTimeUs;
+                        }
+                        if (decodeTimeUs > decodeStats_.maxDecodeTimeUs) {
+                            decodeStats_.maxDecodeTimeUs = decodeTimeUs;
+                        }
+                    }
+
+                    // Calculate actual FPS
+                    auto now = std::chrono::steady_clock::now();
+                    double elapsedSec = std::chrono::duration<double>(now - statsStartTime_).count();
+                    if (elapsedSec > 0.1) {  // Avoid division by zero / early jitter
+                        decodeStats_.actualFps = decodeStats_.framesDecoded / elapsedSec;
+                    }
+
+                    decodeStats_.queueDepth = currentQueueDepth + 1;  // +1 for the frame we just added
+                }
             }
 
             av_frame_unref(frame);
@@ -309,6 +414,11 @@ std::unique_ptr<VideoFrame> VideoDecoder::getFrame() {
     auto frame = std::move(frameQueue_.front());
     frameQueue_.pop();
     return frame;
+}
+
+DecodeStats VideoDecoder::getDecodeStats() const {
+    std::lock_guard<std::mutex> lock(statsMutex_);
+    return decodeStats_;
 }
 
 } // namespace latency
