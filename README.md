@@ -76,10 +76,10 @@ build\Release\LatencyTestTool.exe
 | `U` | Edit stream URL |
 | `C` | Connect to stream |
 | `D` | Disconnect |
-| `T` | Start/Stop test |
-| `E` | Export results to JSON |
+| `T` | Start/Stop timestamp clock |
+| `SPACE` | Freeze frame to measure latency |
 | `S` | Save screenshot |
-| `ESC` | Quit |
+| `ESC` | Quit / Unpause |
 
 ### Example Workflow
 
@@ -90,6 +90,26 @@ build\Release\LatencyTestTool.exe
 5. Press `T` to start the test
 6. The application will measure and display latency values
 7. Press `E` to export results
+
+## Distribution
+
+To share the application with others who don't need to build from source:
+
+### Creating a Distribution Package
+
+```bash
+package.bat
+```
+
+This creates `dist/LatencyTestTool-v1.0.0-win64.zip` containing the executable and all required DLLs.
+
+### For Recipients
+
+1. Extract the zip file
+2. Run `LatencyTestTool.exe`
+3. If the app doesn't start, install [Visual C++ Redistributable 2022](https://aka.ms/vs/17/release/vc_redist.x64.exe)
+
+No installation or build tools required - just extract and run.
 
 ## Project Structure
 

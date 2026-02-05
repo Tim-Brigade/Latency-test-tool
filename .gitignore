@@ -3,6 +3,9 @@ build/
 out/
 cmake-build-*/
 
+# Distribution packages
+dist/
+
 # vcpkg installed packages (managed by vcpkg, regenerated on build)
 vcpkg_installed/
 
