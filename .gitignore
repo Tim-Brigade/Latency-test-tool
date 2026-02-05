@@ -1,0 +1,51 @@
+# Build directories
+build/
+out/
+cmake-build-*/
+
+# vcpkg installed packages (managed by vcpkg, regenerated on build)
+vcpkg_installed/
+
+# IDE files
+.vs/
+.vscode/
+*.user
+*.suo
+*.sln.docstates
+*.vcxproj.user
+
+# Compiled binaries
+*.exe
+*.dll
+*.lib
+*.obj
+*.o
+*.a
+*.pdb
+*.ilk
+*.exp
+
+# Debug files
+*.log
+*.tlog/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# Test results and screenshots
+results/
+screenshots/
+results_*.json
+!vcpkg.json
+
+# Resource files that are downloaded/generated
+resources/fonts/*.ttf
+!resources/fonts/.gitkeep

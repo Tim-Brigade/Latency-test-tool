@@ -1,0 +1,14 @@
+{
+  "name": "latency-test-tool",
+  "version": "1.0.0",
+  "description": "Video latency test tool for RTSP/RTP camera streams",
+  "dependencies": [
+    {
+      "name": "ffmpeg",
+      "default-features": false,
+      "features": ["avcodec", "avformat", "swscale", "swresample"]
+    },
+    "sdl2",
+    "sdl2-ttf"
+  ]
+}
