@@ -2,6 +2,8 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <fstream>
+#include <algorithm>
 
 namespace latency {
 
@@ -72,7 +74,16 @@ bool App::init(const AppConfig& config) {
     videoRenderer_ = std::make_unique<VideoRenderer>();
     videoRenderer_->init(renderer_);
 
-    urlInput_ = "rtsp://192.168.1.100:554/stream";
+    // Load connection history
+    historyFilePath_ = "connection_history.txt";
+    loadConnectionHistory();
+
+    // Set default URL or use most recent from history
+    if (!connectionHistory_.empty()) {
+        urlInput_ = connectionHistory_[0];
+    } else {
+        urlInput_ = "rtsp://192.168.1.100:554/stream";
+    }
 
     return true;
 }
@@ -187,12 +198,35 @@ void App::handleKeyDown(SDL_Keycode key) {
             break;
 
         case SDLK_ESCAPE:
-            if (paused_) {
+            if (showingHelp_ || showingAbout_) {
+                showingHelp_ = false;
+                showingAbout_ = false;
+            } else if (paused_) {
                 togglePause();  // Unpause
             } else if (state_ == AppState::Running) {
                 stopClock();
             } else {
                 appRunning_ = false;
+            }
+            break;
+
+        case SDLK_F1:
+            showingHelp_ = !showingHelp_;
+            showingAbout_ = false;
+            break;
+
+        case SDLK_F2:
+            showingAbout_ = !showingAbout_;
+            showingHelp_ = false;
+            break;
+
+        // Number keys 1-9 to select from connection history
+        case SDLK_1: case SDLK_2: case SDLK_3:
+        case SDLK_4: case SDLK_5: case SDLK_6:
+        case SDLK_7: case SDLK_8: case SDLK_9:
+            if (state_ == AppState::Disconnected && !urlInputActive_) {
+                int index = key - SDLK_1;
+                selectFromHistory(index);
             }
             break;
 
@@ -218,13 +252,15 @@ void App::render() {
 
     renderUI();
 
-    // Timestamp display (left panel)
+    // Timestamp display (left panel) - pass paused state to freeze the clock
     int timestampWidth = config_.timestampPanelWidth;
     timestampDisplay_->render(
         padding,
         topBarHeight,
         timestampWidth - padding * 2,
-        contentHeight
+        contentHeight,
+        paused_,
+        pausedTimestamp_
     );
 
     // Video (right panel)
@@ -240,9 +276,22 @@ void App::render() {
     // Stats panel (before pause overlay so it's visible when not paused)
     renderStatsPanel();
 
+    // Connection history (when disconnected)
+    if (state_ == AppState::Disconnected && !connectionHistory_.empty()) {
+        renderConnectionHistory();
+    }
+
     // Pause overlay
     if (paused_) {
         renderPauseOverlay();
+    }
+
+    // Help/About panels
+    if (showingHelp_) {
+        renderHelpPanel();
+    }
+    if (showingAbout_) {
+        renderAboutPanel();
     }
 
     renderStatusBar();
@@ -383,75 +432,9 @@ void App::renderPauseOverlay() {
 
     // PAUSED text
     SDL_Color red = {255, 80, 80, 255};
-    renderTextCentered("PAUSED", videoX + videoWidth / 2, videoY + 50, red);
+    renderTextCentered("PAUSED", videoX + videoWidth / 2, videoY + videoHeight / 2 - 20, red);
 
-    // Show current live time vs frozen time
     SDL_Color white = {255, 255, 255, 255};
-    SDL_Color green = {100, 255, 100, 255};
-    SDL_Color yellow = {255, 255, 100, 255};
-
-    int infoY = videoY + videoHeight / 2 - 60;
-
-    renderTextCentered("FROZEN FRAME TIME:", videoX + videoWidth / 2, infoY, white);
-
-    // Format frozen timestamp
-    uint32_t ms = pausedTimestamp_ % 1000;
-    uint32_t totalSec = pausedTimestamp_ / 1000;
-    uint32_t sec = totalSec % 60;
-    uint32_t min = (totalSec / 60) % 60;
-
-    std::ostringstream frozenTime;
-    frozenTime << std::setfill('0') << std::setw(2) << min << ":"
-               << std::setw(2) << sec << "." << std::setw(3) << ms;
-
-    if (largeFont_) {
-        SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, frozenTime.str().c_str(), green);
-        if (surface) {
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
-            if (texture) {
-                SDL_Rect rect = {videoX + (videoWidth - surface->w) / 2, infoY + 30, surface->w, surface->h};
-                SDL_RenderCopy(renderer_, texture, nullptr, &rect);
-                SDL_DestroyTexture(texture);
-            }
-            SDL_FreeSurface(surface);
-        }
-    }
-
-    // Show current live time for comparison
-    uint32_t currentTs = timestampDisplay_->getCurrentTimestamp();
-    uint32_t curMs = currentTs % 1000;
-    uint32_t curTotalSec = currentTs / 1000;
-    uint32_t curSec = curTotalSec % 60;
-    uint32_t curMin = (curTotalSec / 60) % 60;
-
-    std::ostringstream currentTime;
-    currentTime << std::setfill('0') << std::setw(2) << curMin << ":"
-                << std::setw(2) << curSec << "." << std::setw(3) << curMs;
-
-    renderTextCentered("CURRENT LIVE TIME:", videoX + videoWidth / 2, infoY + 130, white);
-
-    if (largeFont_) {
-        SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, currentTime.str().c_str(), yellow);
-        if (surface) {
-            SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
-            if (texture) {
-                SDL_Rect rect = {videoX + (videoWidth - surface->w) / 2, infoY + 160, surface->w, surface->h};
-                SDL_RenderCopy(renderer_, texture, nullptr, &rect);
-                SDL_DestroyTexture(texture);
-            }
-            SDL_FreeSurface(surface);
-        }
-    }
-
-    // Calculate and show difference
-    int32_t diff = static_cast<int32_t>(currentTs) - static_cast<int32_t>(pausedTimestamp_);
-
-    std::ostringstream diffText;
-    diffText << "LATENCY: " << diff << " ms";
-
-    SDL_Color cyan = {100, 200, 255, 255};
-    renderTextCentered(diffText.str(), videoX + videoWidth / 2, infoY + 260, cyan);
-
     renderTextCentered("[SPACE] to unpause  |  [S] screenshot", videoX + videoWidth / 2, videoY + videoHeight - 40, white);
 }
 
@@ -560,6 +543,189 @@ void App::renderStatsPanel() {
     renderText(queueStr, valueX, y, valueColor);
 }
 
+void App::renderHelpPanel() {
+    const int panelWidth = 500;
+    const int panelHeight = 420;
+    const int panelX = (config_.windowWidth - panelWidth) / 2;
+    const int panelY = (config_.windowHeight - panelHeight) / 2;
+    const int padding = 20;
+    const int lineHeight = 26;
+
+    // Darken background
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
+    SDL_Rect fullscreen = {0, 0, config_.windowWidth, config_.windowHeight};
+    SDL_RenderFillRect(renderer_, &fullscreen);
+
+    // Panel background
+    SDL_SetRenderDrawColor(renderer_, 30, 30, 40, 255);
+    SDL_Rect panelRect = {panelX, panelY, panelWidth, panelHeight};
+    SDL_RenderFillRect(renderer_, &panelRect);
+
+    // Border
+    SDL_SetRenderDrawColor(renderer_, 80, 120, 180, 255);
+    SDL_RenderDrawRect(renderer_, &panelRect);
+
+    SDL_Color titleColor = {100, 200, 255, 255};
+    SDL_Color keyColor = {255, 255, 100, 255};
+    SDL_Color descColor = {200, 200, 200, 255};
+    SDL_Color headerColor = {150, 180, 255, 255};
+
+    int y = panelY + padding;
+    int centerX = panelX + panelWidth / 2;
+
+    // Title
+    renderTextCentered("HELP - KEYBOARD SHORTCUTS", centerX, y, titleColor);
+    y += lineHeight + 10;
+
+    // Connection section
+    renderText("CONNECTION:", panelX + padding, y, headerColor);
+    y += lineHeight;
+    renderText("U", panelX + padding + 20, y, keyColor);
+    renderText("Edit stream URL", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("C", panelX + padding + 20, y, keyColor);
+    renderText("Connect to stream", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("D", panelX + padding + 20, y, keyColor);
+    renderText("Disconnect from stream", panelX + padding + 80, y, descColor);
+    y += lineHeight + 8;
+
+    // Test section
+    renderText("LATENCY TEST:", panelX + padding, y, headerColor);
+    y += lineHeight;
+    renderText("T", panelX + padding + 20, y, keyColor);
+    renderText("Start/Stop timestamp clock", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("SPACE", panelX + padding + 20, y, keyColor);
+    renderText("Freeze frame (measure latency)", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("S", panelX + padding + 20, y, keyColor);
+    renderText("Save screenshot", panelX + padding + 80, y, descColor);
+    y += lineHeight + 8;
+
+    // General section
+    renderText("GENERAL:", panelX + padding, y, headerColor);
+    y += lineHeight;
+    renderText("F1", panelX + padding + 20, y, keyColor);
+    renderText("Show this help panel", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("F2", panelX + padding + 20, y, keyColor);
+    renderText("Show about panel", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("ESC", panelX + padding + 20, y, keyColor);
+    renderText("Close panel / Stop test / Quit", panelX + padding + 80, y, descColor);
+
+    // Footer
+    y = panelY + panelHeight - padding - lineHeight;
+    renderTextCentered("Press ESC or F1 to close", centerX, y, descColor);
+}
+
+void App::renderAboutPanel() {
+    const int panelWidth = 520;
+    const int panelHeight = 320;
+    const int panelX = (config_.windowWidth - panelWidth) / 2;
+    const int panelY = (config_.windowHeight - panelHeight) / 2;
+    const int padding = 20;
+    const int lineHeight = 26;
+
+    // Darken background
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
+    SDL_Rect fullscreen = {0, 0, config_.windowWidth, config_.windowHeight};
+    SDL_RenderFillRect(renderer_, &fullscreen);
+
+    // Panel background
+    SDL_SetRenderDrawColor(renderer_, 30, 30, 40, 255);
+    SDL_Rect panelRect = {panelX, panelY, panelWidth, panelHeight};
+    SDL_RenderFillRect(renderer_, &panelRect);
+
+    // Border
+    SDL_SetRenderDrawColor(renderer_, 80, 120, 180, 255);
+    SDL_RenderDrawRect(renderer_, &panelRect);
+
+    SDL_Color titleColor = {100, 200, 255, 255};
+    SDL_Color labelColor = {150, 150, 150, 255};
+    SDL_Color valueColor = {255, 255, 255, 255};
+    SDL_Color linkColor = {100, 180, 255, 255};
+
+    int y = panelY + padding;
+    int centerX = panelX + panelWidth / 2;
+
+    // Title
+    renderTextCentered("ABOUT", centerX, y, titleColor);
+    y += lineHeight + 15;
+
+    // App name
+    renderTextCentered("Video Latency Test Tool", centerX, y, valueColor);
+    y += lineHeight;
+    renderTextCentered("Version 1.0", centerX, y, labelColor);
+    y += lineHeight + 20;
+
+    // Author
+    renderText("Author:", panelX + padding, y, labelColor);
+    y += lineHeight;
+    renderTextCentered("tim.biddulph@brigade-electroincs.com", centerX, y, linkColor);
+    y += lineHeight + 20;
+
+    // Description
+    renderTextCentered("A tool for measuring end-to-end", centerX, y, labelColor);
+    y += lineHeight;
+    renderTextCentered("video streaming latency via RTSP/RTP", centerX, y, labelColor);
+
+    // Footer
+    y = panelY + panelHeight - padding - lineHeight;
+    renderTextCentered("Press ESC or F2 to close", centerX, y, labelColor);
+}
+
+void App::renderConnectionHistory() {
+    if (connectionHistory_.empty()) return;
+
+    // Position in the video area when disconnected
+    const int panelX = config_.timestampPanelWidth + 20;
+    const int panelY = 90;
+    const int lineHeight = 24;
+    const int padding = 15;
+    const int panelWidth = 500;
+    int numItems = std::min(static_cast<int>(connectionHistory_.size()), MAX_HISTORY_SIZE);
+    const int panelHeight = lineHeight * (numItems + 1) + padding * 2;
+
+    // Semi-transparent background
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 30, 30, 40, 230);
+    SDL_Rect panelRect = {panelX, panelY, panelWidth, panelHeight};
+    SDL_RenderFillRect(renderer_, &panelRect);
+
+    // Border
+    SDL_SetRenderDrawColor(renderer_, 80, 100, 140, 255);
+    SDL_RenderDrawRect(renderer_, &panelRect);
+
+    SDL_Color headerColor = {100, 200, 255, 255};
+    SDL_Color keyColor = {255, 255, 100, 255};
+    SDL_Color urlColor = {200, 200, 200, 255};
+
+    int y = panelY + padding;
+
+    // Header
+    renderText("RECENT CONNECTIONS (press 1-9 to connect):", panelX + padding, y, headerColor);
+    y += lineHeight + 4;
+
+    // List entries
+    for (int i = 0; i < numItems; i++) {
+        // Key number
+        std::string keyStr = "[" + std::to_string(i + 1) + "]";
+        renderText(keyStr, panelX + padding, y, keyColor);
+
+        // URL (truncate if too long)
+        std::string url = connectionHistory_[i];
+        if (url.length() > 55) {
+            url = url.substr(0, 52) + "...";
+        }
+        renderText(url, panelX + padding + 40, y, urlColor);
+        y += lineHeight;
+    }
+}
+
 void App::renderStatusBar() {
     // Background for status bar
     SDL_SetRenderDrawColor(renderer_, 25, 25, 30, 255);
@@ -576,26 +742,29 @@ void App::renderStatusBar() {
 
     switch (state_) {
         case AppState::Disconnected:
-            statusText = "Disconnected - Press C to connect, or U to edit URL";
+            if (!connectionHistory_.empty()) {
+                statusText = "Disconnected - C: connect, U: edit URL, 1-9: recent";
+            } else {
+                statusText = "Disconnected - C: connect, U: edit URL";
+            }
             statusColor = {150, 150, 150, 255};
             break;
         case AppState::Connecting:
             statusText = "Connecting...";
             statusColor = {255, 200, 100, 255};
             break;
-        case AppState::Connected:
-            statusText = "Connected: " + videoDecoder_->getStreamInfo().codecName +
-                        " " + std::to_string(videoDecoder_->getStreamInfo().width) +
-                        "x" + std::to_string(videoDecoder_->getStreamInfo().height) +
-                        " - Press T to start clock";
+        case AppState::Connected: {
+            std::string protoStr = (videoDecoder_->getDetectedProtocol() == StreamProtocol::RTP) ? "RTP" : "RTSP";
+            statusText = "Connected [" + protoStr + "] - T: start clock, D: disconnect";
             statusColor = {100, 200, 100, 255};
             break;
+        }
         case AppState::Running:
             if (paused_) {
-                statusText = "PAUSED - Press SPACE to unpause";
+                statusText = "PAUSED - SPACE: unpause, D: disconnect";
                 statusColor = {255, 100, 100, 255};
             } else {
-                statusText = "Running - Press SPACE to freeze frame, T to stop";
+                statusText = "Running - SPACE: freeze, T: stop clock, D: disconnect";
                 statusColor = {100, 150, 255, 255};
             }
             break;
@@ -607,6 +776,15 @@ void App::renderStatusBar() {
     }
 
     renderText(statusText, 10, y, statusColor);
+
+    // Help/About shortcuts on right side
+    SDL_Color helpColor = {120, 120, 140, 255};
+    std::string helpText = "F1: Help  |  F2: About";
+    if (smallFont_) {
+        int textWidth;
+        TTF_SizeText(smallFont_, helpText.c_str(), &textWidth, nullptr);
+        renderText(helpText, config_.windowWidth - textWidth - 10, y, helpColor);
+    }
 }
 
 void App::renderText(const std::string& text, int x, int y, SDL_Color color) {
@@ -645,6 +823,8 @@ void App::connect() {
 
     if (videoDecoder_->connect(streamConfig_)) {
         state_ = AppState::Connected;
+        // Save successful connection to history
+        addToConnectionHistory(urlInput_);
     } else {
         state_ = AppState::Disconnected;
     }
@@ -679,6 +859,8 @@ void App::togglePause() {
         // Capture current timestamp when pausing
         pausedTimestamp_ = timestampDisplay_->getCurrentTimestamp();
     }
+    // Pause/resume decoder to stop frame processing
+    videoDecoder_->setPaused(paused_);
 }
 
 void App::saveScreenshot() {
@@ -701,6 +883,53 @@ void App::saveScreenshot() {
     SDL_FreeSurface(surface);
 
     std::cout << "Screenshot saved: " << filename.str() << std::endl;
+}
+
+void App::loadConnectionHistory() {
+    connectionHistory_.clear();
+    std::ifstream file(historyFilePath_);
+    if (!file.is_open()) return;
+
+    std::string line;
+    while (std::getline(file, line) && connectionHistory_.size() < MAX_HISTORY_SIZE) {
+        if (!line.empty()) {
+            connectionHistory_.push_back(line);
+        }
+    }
+}
+
+void App::saveConnectionHistory() {
+    std::ofstream file(historyFilePath_);
+    if (!file.is_open()) return;
+
+    for (const auto& url : connectionHistory_) {
+        file << url << "\n";
+    }
+}
+
+void App::addToConnectionHistory(const std::string& url) {
+    // Remove if already exists (to move to front)
+    auto it = std::find(connectionHistory_.begin(), connectionHistory_.end(), url);
+    if (it != connectionHistory_.end()) {
+        connectionHistory_.erase(it);
+    }
+
+    // Add to front
+    connectionHistory_.insert(connectionHistory_.begin(), url);
+
+    // Limit size
+    if (connectionHistory_.size() > MAX_HISTORY_SIZE) {
+        connectionHistory_.resize(MAX_HISTORY_SIZE);
+    }
+
+    saveConnectionHistory();
+}
+
+void App::selectFromHistory(int index) {
+    if (index >= 0 && index < static_cast<int>(connectionHistory_.size())) {
+        urlInput_ = connectionHistory_[index];
+        connect();
+    }
 }
 
 } // namespace latency

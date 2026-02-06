@@ -14,7 +14,7 @@ public:
     ~TimestampDisplay();
 
     bool init(SDL_Renderer* renderer, const std::string& fontPath, int fontSize);
-    void render(int x, int y, int width, int height);
+    void render(int x, int y, int width, int height, bool paused = false, uint32_t frozenTimestamp = 0);
 
     // Get current timestamp (milliseconds since test start)
     uint32_t getCurrentTimestamp() const;

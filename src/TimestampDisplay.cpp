@@ -66,23 +66,24 @@ uint32_t TimestampDisplay::getCurrentTimestamp() const {
     return static_cast<uint32_t>(elapsed.count());
 }
 
-void TimestampDisplay::render(int x, int y, int width, int height) {
-    // Background
-    SDL_SetRenderDrawColor(renderer_, 10, 10, 15, 255);
+void TimestampDisplay::render(int x, int y, int width, int height, bool paused, uint32_t frozenTimestamp) {
+    // White background for faster camera shutter
+    SDL_SetRenderDrawColor(renderer_, 255, 255, 255, 255);
     SDL_Rect bgRect = {x, y, width, height};
     SDL_RenderFillRect(renderer_, &bgRect);
 
-    // Border
-    SDL_SetRenderDrawColor(renderer_, 50, 50, 70, 255);
+    // Dark border
+    SDL_SetRenderDrawColor(renderer_, 60, 60, 60, 255);
     SDL_RenderDrawRect(renderer_, &bgRect);
 
-    uint32_t timestamp = getCurrentTimestamp();
+    // Use frozen timestamp when paused, otherwise current timestamp
+    uint32_t timestamp = paused ? frozenTimestamp : getCurrentTimestamp();
     int centerX = x + width / 2;
 
-    // Title at top
+    // Title at top - dark text on white background
     if (font_) {
-        SDL_Color titleColor = running_ ? SDL_Color{100, 255, 150, 255} : SDL_Color{150, 150, 150, 255};
-        const char* title = running_ ? "CLOCK RUNNING" : "PRESS [T] TO START";
+        SDL_Color titleColor = running_ ? SDL_Color{0, 120, 60, 255} : SDL_Color{100, 100, 100, 255};
+        const char* title = paused ? "PAUSED" : (running_ ? "CLOCK RUNNING" : "PRESS [T] TO START");
         SDL_Surface* surface = TTF_RenderText_Blended(font_, title, titleColor);
         if (surface) {
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
@@ -100,10 +101,10 @@ void TimestampDisplay::render(int x, int y, int width, int height) {
     renderLargeClock(centerX, clockY, timestamp);
     renderMilliseconds(centerX, clockY + 70, timestamp);
 
-    // Instructions at bottom
+    // Instructions at bottom - dark text
     if (font_) {
-        SDL_Color cyan = {80, 180, 255, 255};
-        SDL_Surface* surface = TTF_RenderText_Blended(font_, "Point camera here", cyan);
+        SDL_Color darkBlue = {0, 80, 150, 255};
+        SDL_Surface* surface = TTF_RenderText_Blended(font_, "Point camera here", darkBlue);
         if (surface) {
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             if (texture) {
@@ -114,8 +115,8 @@ void TimestampDisplay::render(int x, int y, int width, int height) {
             SDL_FreeSurface(surface);
         }
 
-        SDL_Color yellow = {255, 220, 80, 255};
-        surface = TTF_RenderText_Blended(font_, "[SPACE] freeze", yellow);
+        SDL_Color darkOrange = {180, 100, 0, 255};
+        surface = TTF_RenderText_Blended(font_, "[SPACE] freeze", darkOrange);
         if (surface) {
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
             if (texture) {
@@ -139,8 +140,9 @@ void TimestampDisplay::renderLargeClock(int centerX, int y, uint32_t timestamp) 
     std::ostringstream oss;
     oss << std::setfill('0') << std::setw(2) << min << ":" << std::setw(2) << sec;
 
-    SDL_Color white = {255, 255, 255, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, oss.str().c_str(), white);
+    // Dark text on white background
+    SDL_Color black = {0, 0, 0, 255};
+    SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, oss.str().c_str(), black);
     if (!surface) return;
 
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);
@@ -160,15 +162,15 @@ void TimestampDisplay::renderLargeClock(int centerX, int y, uint32_t timestamp) 
 void TimestampDisplay::renderMilliseconds(int centerX, int y, uint32_t timestamp) {
     if (!largeFont_) return;
 
-    // Show milliseconds prominently
-    uint32_t ms = timestamp % 1000;
+    // Show centiseconds (10ms resolution) - more readable than full milliseconds
+    uint32_t cs = (timestamp % 1000) / 10;
 
     std::ostringstream oss;
-    oss << "." << std::setfill('0') << std::setw(3) << ms;
+    oss << "." << std::setfill('0') << std::setw(2) << cs;
 
-    // Bright green for visibility
-    SDL_Color green = {0, 255, 100, 255};
-    SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, oss.str().c_str(), green);
+    // Dark green for visibility on white background
+    SDL_Color darkGreen = {0, 100, 50, 255};
+    SDL_Surface* surface = TTF_RenderText_Blended(largeFont_, oss.str().c_str(), darkGreen);
     if (!surface) return;
 
     SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);

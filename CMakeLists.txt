@@ -29,8 +29,8 @@ set(HEADERS
     src/Config.h
 )
 
-# Create executable
-add_executable(${PROJECT_NAME} ${SOURCES} ${HEADERS})
+# Create executable (WIN32 hides console window on Windows)
+add_executable(${PROJECT_NAME} WIN32 ${SOURCES} ${HEADERS})
 
 # Include directories
 target_include_directories(${PROJECT_NAME} PRIVATE

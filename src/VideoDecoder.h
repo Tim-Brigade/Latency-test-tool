@@ -75,6 +75,10 @@ public:
     void disconnect();
     bool isConnected() const { return connected_; }
 
+    // Pause/resume decoding (stops frame processing without disconnecting)
+    void setPaused(bool paused);
+    bool isPaused() const { return paused_; }
+
     // Get next decoded frame (returns nullptr if none available)
     std::unique_ptr<VideoFrame> getFrame();
 
@@ -85,7 +89,12 @@ public:
     // Get decode statistics (thread-safe copy)
     DecodeStats getDecodeStats() const;
 
+    // Get detected stream protocol
+    StreamProtocol getDetectedProtocol() const { return detectedProtocol_; }
+
 private:
+    // Detect protocol from URL scheme
+    StreamProtocol detectProtocol(const std::string& url) const;
     void decodeThread();
     bool openCodec();
     std::unique_ptr<VideoFrame> convertFrame(AVFrame* frame);
@@ -97,10 +106,12 @@ private:
 
     StreamInfo streamInfo_;
     std::string lastError_;
+    StreamProtocol detectedProtocol_ = StreamProtocol::AUTO;
 
     std::thread decodeThread_;
     std::atomic<bool> running_{false};
     std::atomic<bool> connected_{false};
+    std::atomic<bool> paused_{false};
 
     std::queue<std::unique_ptr<VideoFrame>> frameQueue_;
     std::mutex queueMutex_;

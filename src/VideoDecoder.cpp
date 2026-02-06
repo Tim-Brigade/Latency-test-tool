@@ -22,6 +22,13 @@ bool VideoDecoder::connect(const StreamConfig& config) {
 
     lastError_.clear();
 
+    // Detect protocol from URL if set to AUTO
+    if (config.protocol == StreamProtocol::AUTO) {
+        detectedProtocol_ = detectProtocol(config.url);
+    } else {
+        detectedProtocol_ = config.protocol;
+    }
+
     // Allocate format context
     formatCtx_ = avformat_alloc_context();
     if (!formatCtx_) {
@@ -29,25 +36,40 @@ bool VideoDecoder::connect(const StreamConfig& config) {
         return false;
     }
 
-    // Set low-latency options
+    // Set protocol-specific and low-latency options
     AVDictionary* options = nullptr;
 
-    // Transport protocol
-    if (config.transport == TransportProtocol::TCP) {
-        av_dict_set(&options, "rtsp_transport", "tcp", 0);
-    } else {
-        av_dict_set(&options, "rtsp_transport", "udp", 0);
+    // Protocol-specific options
+    if (detectedProtocol_ == StreamProtocol::RTSP) {
+        // RTSP: Set transport protocol (TCP or UDP for RTP delivery)
+        if (config.transport == TransportProtocol::TCP) {
+            av_dict_set(&options, "rtsp_transport", "tcp", 0);
+        } else {
+            av_dict_set(&options, "rtsp_transport", "udp", 0);
+        }
+        // RTSP-specific timeouts
+        av_dict_set(&options, "stimeout", std::to_string(config.connectionTimeoutMs * 1000).c_str(), 0);
+    } else if (detectedProtocol_ == StreamProtocol::RTP) {
+        // RTP: No rtsp_transport option (it's RTSP-only)
+        // Add reorder queue for out-of-order packets
+        av_dict_set(&options, "reorder_queue_size", "500", 0);
+        // Larger probe size helps with codec detection for raw RTP
+        av_dict_set(&options, "probesize", "524288", 0);  // 512KB for better detection
+        av_dict_set(&options, "analyzeduration", "1000000", 0);  // 1 second
     }
 
-    // Low-latency flags
+    // Common low-latency flags (apply to all protocols)
     av_dict_set(&options, "fflags", "nobuffer", 0);
     av_dict_set(&options, "flags", "low_delay", 0);
     av_dict_set(&options, "max_delay", "0", 0);
-    av_dict_set(&options, "probesize", "32768", 0);  // Small probe size for faster startup
-    av_dict_set(&options, "analyzeduration", "0", 0);
 
-    // Timeouts
-    av_dict_set(&options, "stimeout", std::to_string(config.connectionTimeoutMs * 1000).c_str(), 0);
+    // For RTSP, use smaller probe size for faster startup
+    if (detectedProtocol_ == StreamProtocol::RTSP) {
+        av_dict_set(&options, "probesize", "32768", 0);
+        av_dict_set(&options, "analyzeduration", "0", 0);
+    }
+
+    // Common timeout
     av_dict_set(&options, "timeout", std::to_string(config.receiveTimeoutMs * 1000).c_str(), 0);
 
     // Open input
@@ -216,8 +238,13 @@ bool VideoDecoder::openCodec() {
     return true;
 }
 
+void VideoDecoder::setPaused(bool paused) {
+    paused_ = paused;
+}
+
 void VideoDecoder::disconnect() {
     running_ = false;
+    paused_ = false;
 
     if (decodeThread_.joinable()) {
         queueCv_.notify_all();
@@ -264,6 +291,12 @@ void VideoDecoder::decodeThread() {
     }
 
     while (running_) {
+        // If paused, sleep and skip processing
+        if (paused_) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            continue;
+        }
+
         // Measure demux time
         auto demuxStart = std::chrono::steady_clock::now();
 
@@ -419,6 +452,18 @@ std::unique_ptr<VideoFrame> VideoDecoder::getFrame() {
 DecodeStats VideoDecoder::getDecodeStats() const {
     std::lock_guard<std::mutex> lock(statsMutex_);
     return decodeStats_;
+}
+
+StreamProtocol VideoDecoder::detectProtocol(const std::string& url) const {
+    // Check URL scheme prefix
+    if (url.find("rtsp://") == 0 || url.find("rtsps://") == 0) {
+        return StreamProtocol::RTSP;
+    }
+    if (url.find("rtp://") == 0) {
+        return StreamProtocol::RTP;
+    }
+    // Default to RTSP for unknown schemes
+    return StreamProtocol::RTSP;
 }
 
 } // namespace latency

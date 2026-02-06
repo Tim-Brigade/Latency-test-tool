@@ -9,9 +9,16 @@ enum class TransportProtocol {
     UDP
 };
 
+enum class StreamProtocol {
+    AUTO,   // Auto-detect from URL scheme
+    RTSP,   // rtsp:// - Real Time Streaming Protocol
+    RTP     // rtp:// - Real-time Transport Protocol (direct)
+};
+
 struct StreamConfig {
     std::string url;
-    TransportProtocol transport = TransportProtocol::TCP;
+    StreamProtocol protocol = StreamProtocol::AUTO;  // Auto-detect from URL
+    TransportProtocol transport = TransportProtocol::TCP;  // For RTSP: TCP or UDP
     int connectionTimeoutMs = 5000;
     int receiveTimeoutMs = 2000;
 };
