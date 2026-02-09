@@ -33,6 +33,8 @@ copy "build\Release\LatencyTestTool.exe" "%DIST_DIR%\" >nul
 :: Copy all DLLs
 copy "build\Release\*.dll" "%DIST_DIR%\" >nul
 
+:: Note: connection_history.txt and latency_*.bmp are NOT copied (user data)
+
 :: Copy resources if they exist
 if exist "build\Release\resources" (
     xcopy "build\Release\resources" "%DIST_DIR%\resources\" /E /I /Q >nul
@@ -45,27 +47,31 @@ echo ================================
 echo.
 echo USAGE:
 echo   1. Run LatencyTestTool.exe
-echo   2. Press U to edit the RTSP URL
+echo   2. Press U to edit the RTSP URL, or press 1-9 to use a recent connection
 echo   3. Press C to connect to the stream
 echo   4. Press T to start the timestamp clock
-echo   5. Point your camera at the timestamp display
-echo   6. Press SPACE to freeze and measure latency
+echo   5. Point your camera at the white timestamp display panel
+echo   6. Press SPACE to freeze the frame and measure latency
+echo   7. Compare the frozen time in the video to the clock panel
 echo.
 echo KEYBOARD SHORTCUTS:
-echo   U - Edit URL
-echo   C - Connect to stream
-echo   D - Disconnect
-echo   T - Start/Stop clock
+echo   U     - Edit URL
+echo   C     - Connect to stream
+echo   D     - Disconnect
+echo   T     - Start/Stop clock
 echo   SPACE - Freeze frame ^(measure latency^)
-echo   S - Save screenshot
-echo   ESC - Exit
+echo   S     - Save screenshot
+echo   1-9   - Quick connect to recent URLs
+echo   F1    - Show help
+echo   F2    - Show about
+echo   ESC   - Close panel / Unpause / Exit
 echo.
 echo REQUIREMENTS:
 echo   - Windows 10/11 64-bit
 echo   - Visual C++ Redistributable 2022
 echo     ^(Download from: https://aka.ms/vs/17/release/vc_redist.x64.exe^)
 echo.
-echo For issues, visit: https://github.com/your-repo/latency-test-tool
+echo Author: tim.biddulph@brigade-electronics.com
 ) > "%DIST_DIR%\README.txt"
 
 :: Create zip file using PowerShell

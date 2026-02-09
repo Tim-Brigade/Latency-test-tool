@@ -47,7 +47,11 @@ desktop.ini
 results/
 screenshots/
 results_*.json
+latency_*.bmp
 !vcpkg.json
+
+# User data (connection history may contain internal IPs)
+connection_history.txt
 
 # Resource files that are downloaded/generated
 resources/fonts/*.ttf

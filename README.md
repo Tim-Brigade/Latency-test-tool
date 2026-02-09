@@ -4,10 +4,11 @@ A Windows desktop application for measuring end-to-end video latency in RTSP/RTP
 
 ## Features
 
-- **Real-time timestamp display** - High-precision millisecond clock rendered on screen
+- **Real-time timestamp display** - High-precision clock with 10ms resolution on white background (optimized for camera capture)
 - **RTSP/RTP stream support** - Connect to IP cameras and video encoders via FFmpeg
-- **Automatic latency measurement** - Binary pattern recognition to decode timestamps from video
-- **Export results** - Save measurements to JSON for analysis
+- **Freeze-frame measurement** - Pause video to compare displayed time vs captured time
+- **Connection history** - Remembers recent connections for quick reconnection (keys 1-9)
+- **Decode statistics** - Real-time display of decoder performance, FPS, and frame timing
 - **Screenshot capture** - Document your test setup and results
 
 ## How It Works
@@ -75,21 +76,25 @@ build\Release\LatencyTestTool.exe
 |-----|--------|
 | `U` | Edit stream URL |
 | `C` | Connect to stream |
-| `D` | Disconnect |
+| `D` | Disconnect from stream |
 | `T` | Start/Stop timestamp clock |
 | `SPACE` | Freeze frame to measure latency |
 | `S` | Save screenshot |
-| `ESC` | Quit / Unpause |
+| `1-9` | Quick connect to recent URLs |
+| `F1` | Show help panel |
+| `F2` | Show about panel |
+| `ESC` | Close panel / Unpause / Quit |
 
 ### Example Workflow
 
 1. Launch the application
 2. Press `U` and enter your camera's RTSP URL (e.g., `rtsp://192.168.1.100:554/stream`)
 3. Press `C` to connect
-4. Position your camera to capture the timestamp display
-5. Press `T` to start the test
-6. The application will measure and display latency values
-7. Press `E` to export results
+4. Position your camera to capture the white timestamp display panel
+5. Press `T` to start the clock
+6. Press `SPACE` to freeze the frame and compare times
+7. The frozen time shown in the video vs the clock panel shows the latency
+8. Press `S` to save a screenshot for documentation
 
 ## Distribution
 
