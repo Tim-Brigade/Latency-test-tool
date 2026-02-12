@@ -85,6 +85,9 @@ bool App::init(const AppConfig& config) {
         urlInput_ = "rtsp://192.168.1.100:554/stream";
     }
 
+    // Disable text input by default - only enable when editing URL
+    SDL_StopTextInput();
+
     return true;
 }
 
@@ -155,10 +158,12 @@ void App::handleKeyDown(SDL_Keycode key) {
                 break;
             case SDLK_RETURN:
                 urlInputActive_ = false;
+                SDL_StopTextInput();
                 if (state_ == AppState::Disconnected) connect();
                 break;
             case SDLK_ESCAPE:
                 urlInputActive_ = false;
+                SDL_StopTextInput();
                 break;
             default:
                 break;
@@ -182,6 +187,7 @@ void App::handleKeyDown(SDL_Keycode key) {
             case SDLK_u:
                 showingDiagnostics_ = false;
                 urlInputActive_ = true;
+                SDL_StartTextInput();
                 return;
             default:
                 return;
@@ -217,6 +223,7 @@ void App::handleKeyDown(SDL_Keycode key) {
 
         case SDLK_u:
             urlInputActive_ = true;
+            SDL_StartTextInput();
             break;
 
         case SDLK_p:
