@@ -2,6 +2,7 @@
 
 #include "Config.h"
 #include <string>
+#include <vector>
 #include <memory>
 #include <thread>
 #include <mutex>
@@ -92,9 +93,15 @@ public:
     // Get detected stream protocol
     StreamProtocol getDetectedProtocol() const { return detectedProtocol_; }
 
+    // Get connection diagnostics (populated after connect attempt)
+    const ConnectionDiagnostics& getConnectionDiagnostics() const { return diagnostics_; }
+
 private:
     // Detect protocol from URL scheme
     StreamProtocol detectProtocol(const std::string& url) const;
+    bool tryConnect(const StreamConfig& config, TransportProtocol transport, ConnectionAttempt& attempt);
+    void cleanupConnection();
+    void buildDiagnosticSuggestions();
     void decodeThread();
     bool openCodec();
     std::unique_ptr<VideoFrame> convertFrame(AVFrame* frame);
@@ -107,6 +114,7 @@ private:
     StreamInfo streamInfo_;
     std::string lastError_;
     StreamProtocol detectedProtocol_ = StreamProtocol::AUTO;
+    ConnectionDiagnostics diagnostics_;
 
     std::thread decodeThread_;
     std::atomic<bool> running_{false};

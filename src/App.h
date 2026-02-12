@@ -43,6 +43,7 @@ private:
     void renderHelpPanel();
     void renderAboutPanel();
     void renderConnectionHistory();
+    void renderDiagnosticsPanel();
     void renderInputField(int x, int y, int width, int height,
                           const std::string& label, const std::string& value, bool active);
     void renderButton(int x, int y, int width, int height,
@@ -55,6 +56,7 @@ private:
     void stopClock();
     void togglePause();
     void saveScreenshot();
+    void cycleTransportProtocol();
 
     // Connection history
     void loadConnectionHistory();
@@ -95,9 +97,10 @@ private:
     bool paused_ = false;
     uint32_t pausedTimestamp_ = 0;  // Clock time when paused
 
-    // Help/About panel state
+    // Help/About/Diagnostics panel state
     bool showingHelp_ = false;
     bool showingAbout_ = false;
+    bool showingDiagnostics_ = false;
 };
 
 } // namespace latency

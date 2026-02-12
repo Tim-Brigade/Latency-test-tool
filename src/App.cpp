@@ -166,6 +166,28 @@ void App::handleKeyDown(SDL_Keycode key) {
         return;
     }
 
+    // Diagnostics panel intercepts keys
+    if (showingDiagnostics_) {
+        switch (key) {
+            case SDLK_ESCAPE:
+                showingDiagnostics_ = false;
+                return;
+            case SDLK_c:
+                showingDiagnostics_ = false;
+                connect();
+                return;
+            case SDLK_p:
+                cycleTransportProtocol();
+                return;
+            case SDLK_u:
+                showingDiagnostics_ = false;
+                urlInputActive_ = true;
+                return;
+            default:
+                return;
+        }
+    }
+
     switch (key) {
         case SDLK_c:
             if (state_ == AppState::Disconnected) connect();
@@ -195,6 +217,12 @@ void App::handleKeyDown(SDL_Keycode key) {
 
         case SDLK_u:
             urlInputActive_ = true;
+            break;
+
+        case SDLK_p:
+            if (state_ == AppState::Disconnected) {
+                cycleTransportProtocol();
+            }
             break;
 
         case SDLK_ESCAPE:
@@ -292,6 +320,9 @@ void App::render() {
     }
     if (showingAbout_) {
         renderAboutPanel();
+    }
+    if (showingDiagnostics_) {
+        renderDiagnosticsPanel();
     }
 
     renderStatusBar();
@@ -545,7 +576,7 @@ void App::renderStatsPanel() {
 
 void App::renderHelpPanel() {
     const int panelWidth = 500;
-    const int panelHeight = 420;
+    const int panelHeight = 450;
     const int panelX = (config_.windowWidth - panelWidth) / 2;
     const int panelY = (config_.windowHeight - panelHeight) / 2;
     const int padding = 20;
@@ -589,6 +620,9 @@ void App::renderHelpPanel() {
     y += lineHeight;
     renderText("D", panelX + padding + 20, y, keyColor);
     renderText("Disconnect from stream", panelX + padding + 80, y, descColor);
+    y += lineHeight;
+    renderText("P", panelX + padding + 20, y, keyColor);
+    renderText("Cycle transport (Auto/TCP/UDP)", panelX + padding + 80, y, descColor);
     y += lineHeight + 8;
 
     // Test section
@@ -741,21 +775,33 @@ void App::renderStatusBar() {
     SDL_Color statusColor;
 
     switch (state_) {
-        case AppState::Disconnected:
+        case AppState::Disconnected: {
+            std::string transportLabel;
+            switch (streamConfig_.transport) {
+                case TransportProtocol::AUTO: transportLabel = "Auto"; break;
+                case TransportProtocol::TCP:  transportLabel = "TCP"; break;
+                case TransportProtocol::UDP:  transportLabel = "UDP"; break;
+            }
             if (!connectionHistory_.empty()) {
-                statusText = "Disconnected - C: connect, U: edit URL, 1-9: recent";
+                statusText = "Disconnected [" + transportLabel + "] - C: connect, U: edit URL, P: transport, 1-9: recent";
             } else {
-                statusText = "Disconnected - C: connect, U: edit URL";
+                statusText = "Disconnected [" + transportLabel + "] - C: connect, U: edit URL, P: transport";
             }
             statusColor = {150, 150, 150, 255};
             break;
+        }
         case AppState::Connecting:
             statusText = "Connecting...";
             statusColor = {255, 200, 100, 255};
             break;
         case AppState::Connected: {
             std::string protoStr = (videoDecoder_->getDetectedProtocol() == StreamProtocol::RTP) ? "RTP" : "RTSP";
-            statusText = "Connected [" + protoStr + "] - T: start clock, D: disconnect";
+            const auto& diag = videoDecoder_->getConnectionDiagnostics();
+            std::string transportStr = "TCP";
+            if (!diag.attempts.empty()) {
+                transportStr = (diag.attempts.back().transport == TransportProtocol::UDP) ? "UDP" : "TCP";
+            }
+            statusText = "Connected [" + protoStr + "/" + transportStr + "] - T: start clock, D: disconnect";
             statusColor = {100, 200, 100, 255};
             break;
         }
@@ -820,13 +866,14 @@ void App::renderTextCentered(const std::string& text, int centerX, int y, SDL_Co
 void App::connect() {
     state_ = AppState::Connecting;
     streamConfig_.url = urlInput_;
+    showingDiagnostics_ = false;
 
     if (videoDecoder_->connect(streamConfig_)) {
         state_ = AppState::Connected;
-        // Save successful connection to history
         addToConnectionHistory(urlInput_);
     } else {
         state_ = AppState::Disconnected;
+        showingDiagnostics_ = true;
     }
 }
 
@@ -861,6 +908,153 @@ void App::togglePause() {
     }
     // Pause/resume decoder to stop frame processing
     videoDecoder_->setPaused(paused_);
+}
+
+void App::cycleTransportProtocol() {
+    switch (streamConfig_.transport) {
+        case TransportProtocol::AUTO:
+            streamConfig_.transport = TransportProtocol::TCP;
+            break;
+        case TransportProtocol::TCP:
+            streamConfig_.transport = TransportProtocol::UDP;
+            break;
+        case TransportProtocol::UDP:
+            streamConfig_.transport = TransportProtocol::AUTO;
+            break;
+    }
+}
+
+void App::renderDiagnosticsPanel() {
+    const auto& diag = videoDecoder_->getConnectionDiagnostics();
+
+    const int panelWidth = 600;
+    const int lineHeight = 22;
+    const int padding = 20;
+
+    // Calculate height based on content
+    int numLines = 7; // title + summary + url + transport + blank + attempts header + blank
+    numLines += static_cast<int>(diag.attempts.size()) * 3;
+    numLines += 1 + static_cast<int>(diag.suggestions.size());
+    numLines += 2; // footer
+
+    const int panelHeight = std::min(lineHeight * numLines + padding * 2,
+                                      config_.windowHeight - 40);
+    const int panelX = (config_.windowWidth - panelWidth) / 2;
+    const int panelY = (config_.windowHeight - panelHeight) / 2;
+
+    // Darken background
+    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
+    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
+    SDL_Rect fullscreen = {0, 0, config_.windowWidth, config_.windowHeight};
+    SDL_RenderFillRect(renderer_, &fullscreen);
+
+    // Panel background
+    SDL_SetRenderDrawColor(renderer_, 30, 30, 40, 255);
+    SDL_Rect panelRect = {panelX, panelY, panelWidth, panelHeight};
+    SDL_RenderFillRect(renderer_, &panelRect);
+
+    // Red-tinted border
+    SDL_SetRenderDrawColor(renderer_, 180, 80, 80, 255);
+    SDL_RenderDrawRect(renderer_, &panelRect);
+
+    SDL_Color titleColor = {255, 100, 100, 255};
+    SDL_Color labelColor = {180, 180, 180, 255};
+    SDL_Color valueColor = {255, 255, 255, 255};
+    SDL_Color headerColor = {255, 200, 100, 255};
+    SDL_Color suggestionColor = {100, 255, 150, 255};
+    SDL_Color stageColor = {255, 180, 100, 255};
+
+    int y = panelY + padding;
+    int leftX = panelX + padding;
+    int maxY = panelY + panelHeight - padding - lineHeight * 2;
+
+    // Title
+    renderTextCentered("CONNECTION FAILED", panelX + panelWidth / 2, y, titleColor);
+    y += lineHeight + 8;
+
+    // Summary
+    if (y < maxY) {
+        renderText(diag.summary, leftX, y, valueColor);
+        y += lineHeight + 4;
+    }
+
+    // URL
+    if (y < maxY) {
+        std::string urlDisplay = diag.url;
+        if (urlDisplay.length() > 65) urlDisplay = urlDisplay.substr(0, 62) + "...";
+        renderText("URL: " + urlDisplay, leftX, y, labelColor);
+        y += lineHeight;
+    }
+
+    // Transport setting
+    if (y < maxY) {
+        std::string transportStr;
+        switch (streamConfig_.transport) {
+            case TransportProtocol::AUTO: transportStr = "Auto (TCP then UDP)"; break;
+            case TransportProtocol::TCP: transportStr = "TCP only"; break;
+            case TransportProtocol::UDP: transportStr = "UDP only"; break;
+        }
+        renderText("Transport: " + transportStr, leftX, y, labelColor);
+        y += lineHeight + 8;
+    }
+
+    // Attempt details
+    if (y < maxY) {
+        renderText("ATTEMPTS:", leftX, y, headerColor);
+        y += lineHeight;
+    }
+
+    auto stageName = [](ConnectionStage stage) -> std::string {
+        switch (stage) {
+            case ConnectionStage::OpeningInput: return "Opening stream";
+            case ConnectionStage::FindingStreamInfo: return "Detecting stream format";
+            case ConnectionStage::FindingVideoStream: return "Finding video track";
+            case ConnectionStage::OpeningCodec: return "Opening video codec";
+            case ConnectionStage::Connected: return "Connected";
+            default: return "Unknown";
+        }
+    };
+
+    for (size_t i = 0; i < diag.attempts.size() && y < maxY; i++) {
+        const auto& att = diag.attempts[i];
+        std::string transportLabel = (att.transport == TransportProtocol::TCP) ? "TCP" : "UDP";
+
+        renderText("  " + std::to_string(i + 1) + ". " + transportLabel + ":", leftX, y, stageColor);
+        y += lineHeight;
+
+        if (y < maxY) {
+            renderText("     Failed at: " + stageName(att.failedAt), leftX, y, labelColor);
+            y += lineHeight;
+        }
+
+        if (y < maxY && !att.ffmpegErrorString.empty()) {
+            std::string errDisplay = att.ffmpegErrorString;
+            if (errDisplay.length() > 55) errDisplay = errDisplay.substr(0, 52) + "...";
+            renderText("     Error: " + errDisplay, leftX, y, valueColor);
+            y += lineHeight;
+        }
+    }
+
+    y += 4;
+
+    // Suggestions
+    if (!diag.suggestions.empty() && y < maxY) {
+        renderText("SUGGESTIONS:", leftX, y, headerColor);
+        y += lineHeight;
+        for (const auto& suggestion : diag.suggestions) {
+            if (y >= maxY) break;
+            std::string sugDisplay = suggestion;
+            if (sugDisplay.length() > 70) sugDisplay = sugDisplay.substr(0, 67) + "...";
+            renderText("  > " + sugDisplay, leftX, y, suggestionColor);
+            y += lineHeight;
+        }
+    }
+
+    // Footer
+    y = panelY + panelHeight - padding - lineHeight;
+    SDL_Color footerColor = {150, 150, 150, 255};
+    renderTextCentered("[ESC] close  |  [P] change transport  |  [C] retry",
+                       panelX + panelWidth / 2, y, footerColor);
 }
 
 void App::saveScreenshot() {

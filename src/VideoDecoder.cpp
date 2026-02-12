@@ -21,6 +21,8 @@ bool VideoDecoder::connect(const StreamConfig& config) {
     }
 
     lastError_.clear();
+    diagnostics_ = ConnectionDiagnostics{};
+    diagnostics_.url = config.url;
 
     // Detect protocol from URL if set to AUTO
     if (config.protocol == StreamProtocol::AUTO) {
@@ -28,75 +30,123 @@ bool VideoDecoder::connect(const StreamConfig& config) {
     } else {
         detectedProtocol_ = config.protocol;
     }
+    diagnostics_.detectedProtocol = detectedProtocol_;
 
+    // Build list of transports to try
+    std::vector<TransportProtocol> transportsToTry;
+    if (detectedProtocol_ == StreamProtocol::RTSP) {
+        if (config.transport == TransportProtocol::AUTO) {
+            transportsToTry = { TransportProtocol::TCP, TransportProtocol::UDP };
+        } else {
+            transportsToTry = { config.transport };
+        }
+    } else {
+        // RTP: transport selection not applicable
+        transportsToTry = { TransportProtocol::UDP };
+    }
+
+    // Try each transport
+    for (auto transport : transportsToTry) {
+        ConnectionAttempt attempt;
+        attempt.transport = transport;
+
+        if (tryConnect(config, transport, attempt)) {
+            attempt.failedAt = ConnectionStage::Connected;
+            diagnostics_.attempts.push_back(attempt);
+            diagnostics_.succeeded = true;
+
+            // Fill stream info
+            AVStream* stream = formatCtx_->streams[videoStreamIndex_];
+            streamInfo_.codecName = avcodec_get_name(codecCtx_->codec_id);
+            streamInfo_.width = codecCtx_->width;
+            streamInfo_.height = codecCtx_->height;
+            streamInfo_.bitrate = static_cast<int>(formatCtx_->bit_rate);
+
+            if (stream->avg_frame_rate.den > 0) {
+                streamInfo_.fps = static_cast<double>(stream->avg_frame_rate.num) / stream->avg_frame_rate.den;
+            }
+
+            // Start decode thread
+            connected_ = true;
+            running_ = true;
+            decodeThread_ = std::thread(&VideoDecoder::decodeThread, this);
+            return true;
+        }
+
+        diagnostics_.attempts.push_back(attempt);
+        cleanupConnection();
+    }
+
+    // All attempts failed
+    buildDiagnosticSuggestions();
+    return false;
+}
+
+bool VideoDecoder::tryConnect(const StreamConfig& config, TransportProtocol transport,
+                               ConnectionAttempt& attempt) {
     // Allocate format context
     formatCtx_ = avformat_alloc_context();
     if (!formatCtx_) {
-        lastError_ = "Failed to allocate format context";
+        attempt.failedAt = ConnectionStage::OpeningInput;
+        attempt.ffmpegErrorString = "Failed to allocate format context";
+        lastError_ = attempt.ffmpegErrorString;
         return false;
     }
 
     // Set protocol-specific and low-latency options
     AVDictionary* options = nullptr;
 
-    // Protocol-specific options
     if (detectedProtocol_ == StreamProtocol::RTSP) {
-        // RTSP: Set transport protocol (TCP or UDP for RTP delivery)
-        if (config.transport == TransportProtocol::TCP) {
-            av_dict_set(&options, "rtsp_transport", "tcp", 0);
-        } else {
-            av_dict_set(&options, "rtsp_transport", "udp", 0);
-        }
-        // RTSP-specific timeouts
-        av_dict_set(&options, "stimeout", std::to_string(config.connectionTimeoutMs * 1000).c_str(), 0);
+        av_dict_set(&options, "rtsp_transport",
+                    transport == TransportProtocol::TCP ? "tcp" : "udp", 0);
+        av_dict_set(&options, "stimeout",
+                    std::to_string(config.connectionTimeoutMs * 1000).c_str(), 0);
     } else if (detectedProtocol_ == StreamProtocol::RTP) {
-        // RTP: No rtsp_transport option (it's RTSP-only)
-        // Add reorder queue for out-of-order packets
         av_dict_set(&options, "reorder_queue_size", "500", 0);
-        // Larger probe size helps with codec detection for raw RTP
-        av_dict_set(&options, "probesize", "524288", 0);  // 512KB for better detection
-        av_dict_set(&options, "analyzeduration", "1000000", 0);  // 1 second
     }
 
-    // Common low-latency flags (apply to all protocols)
+    // Common low-latency flags
     av_dict_set(&options, "fflags", "nobuffer", 0);
     av_dict_set(&options, "flags", "low_delay", 0);
     av_dict_set(&options, "max_delay", "0", 0);
 
-    // For RTSP, use smaller probe size for faster startup
-    if (detectedProtocol_ == StreamProtocol::RTSP) {
-        av_dict_set(&options, "probesize", "32768", 0);
-        av_dict_set(&options, "analyzeduration", "0", 0);
-    }
+    // Use config-driven probe size and analyze duration
+    av_dict_set(&options, "probesize", std::to_string(config.probeSize).c_str(), 0);
+    av_dict_set(&options, "analyzeduration", std::to_string(config.analyzeDurationUs).c_str(), 0);
 
-    // Common timeout
+    // Receive timeout
     av_dict_set(&options, "timeout", std::to_string(config.receiveTimeoutMs * 1000).c_str(), 0);
 
-    // Open input
+    // Stage: Opening input
+    attempt.failedAt = ConnectionStage::OpeningInput;
     int ret = avformat_open_input(&formatCtx_, config.url.c_str(), nullptr, &options);
     av_dict_free(&options);
 
     if (ret < 0) {
         char errBuf[256];
         av_strerror(ret, errBuf, sizeof(errBuf));
+        attempt.ffmpegErrorCode = ret;
+        attempt.ffmpegErrorString = errBuf;
         lastError_ = "Failed to open stream: " + std::string(errBuf);
-        avformat_free_context(formatCtx_);
         formatCtx_ = nullptr;
         return false;
     }
 
-    // Find stream info (with short timeout for low latency)
-    formatCtx_->max_analyze_duration = 500000;  // 0.5 seconds
+    // Stage: Finding stream info
+    attempt.failedAt = ConnectionStage::FindingStreamInfo;
+    formatCtx_->max_analyze_duration = config.analyzeDurationUs;
     ret = avformat_find_stream_info(formatCtx_, nullptr);
     if (ret < 0) {
         char errBuf[256];
         av_strerror(ret, errBuf, sizeof(errBuf));
+        attempt.ffmpegErrorCode = ret;
+        attempt.ffmpegErrorString = errBuf;
         lastError_ = "Failed to find stream info: " + std::string(errBuf);
-        avformat_close_input(&formatCtx_);
         return false;
     }
 
-    // Find video stream
+    // Stage: Finding video stream
+    attempt.failedAt = ConnectionStage::FindingVideoStream;
     videoStreamIndex_ = -1;
     for (unsigned int i = 0; i < formatCtx_->nb_streams; i++) {
         if (formatCtx_->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -106,34 +156,108 @@ bool VideoDecoder::connect(const StreamConfig& config) {
     }
 
     if (videoStreamIndex_ < 0) {
+        attempt.ffmpegErrorString = "No video stream found in container";
         lastError_ = "No video stream found";
-        avformat_close_input(&formatCtx_);
         return false;
     }
 
-    // Open codec
+    // Stage: Opening codec
+    attempt.failedAt = ConnectionStage::OpeningCodec;
     if (!openCodec()) {
-        avformat_close_input(&formatCtx_);
+        attempt.ffmpegErrorString = lastError_;
         return false;
     }
-
-    // Fill stream info
-    AVStream* stream = formatCtx_->streams[videoStreamIndex_];
-    streamInfo_.codecName = avcodec_get_name(codecCtx_->codec_id);
-    streamInfo_.width = codecCtx_->width;
-    streamInfo_.height = codecCtx_->height;
-    streamInfo_.bitrate = static_cast<int>(formatCtx_->bit_rate);
-
-    if (stream->avg_frame_rate.den > 0) {
-        streamInfo_.fps = static_cast<double>(stream->avg_frame_rate.num) / stream->avg_frame_rate.den;
-    }
-
-    // Start decode thread
-    connected_ = true;
-    running_ = true;
-    decodeThread_ = std::thread(&VideoDecoder::decodeThread, this);
 
     return true;
+}
+
+void VideoDecoder::cleanupConnection() {
+    if (swsCtx_) { sws_freeContext(swsCtx_); swsCtx_ = nullptr; }
+    if (codecCtx_) { avcodec_free_context(&codecCtx_); codecCtx_ = nullptr; }
+    if (formatCtx_) { avformat_close_input(&formatCtx_); formatCtx_ = nullptr; }
+    videoStreamIndex_ = -1;
+}
+
+void VideoDecoder::buildDiagnosticSuggestions() {
+    diagnostics_.suggestions.clear();
+
+    if (diagnostics_.attempts.empty()) return;
+
+    const auto& lastAttempt = diagnostics_.attempts.back();
+
+    // Stage-based summary
+    switch (lastAttempt.failedAt) {
+        case ConnectionStage::OpeningInput:
+            diagnostics_.summary = "Could not connect to the stream URL.";
+            break;
+        case ConnectionStage::FindingStreamInfo:
+            diagnostics_.summary = "Connected but could not detect stream format.";
+            break;
+        case ConnectionStage::FindingVideoStream:
+            diagnostics_.summary = "Stream opened but contains no video track.";
+            break;
+        case ConnectionStage::OpeningCodec:
+            diagnostics_.summary = "Video found but the codec could not be initialized.";
+            break;
+        default:
+            diagnostics_.summary = "Connection failed.";
+    }
+
+    // Analyze error patterns across all attempts
+    bool hadTimeout = false;
+    bool hadConnectionRefused = false;
+    bool hadAuth = false;
+    bool triedTcp = false, triedUdp = false;
+
+    for (const auto& att : diagnostics_.attempts) {
+        if (att.transport == TransportProtocol::TCP) triedTcp = true;
+        if (att.transport == TransportProtocol::UDP) triedUdp = true;
+
+        const auto& err = att.ffmpegErrorString;
+        if (err.find("Connection refused") != std::string::npos ||
+            err.find("connection refused") != std::string::npos) {
+            hadConnectionRefused = true;
+        }
+        if (err.find("timed out") != std::string::npos ||
+            err.find("Timeout") != std::string::npos ||
+            err.find("timeout") != std::string::npos) {
+            hadTimeout = true;
+        }
+        if (err.find("401") != std::string::npos ||
+            err.find("Unauthorized") != std::string::npos) {
+            hadAuth = true;
+        }
+    }
+
+    // Generate actionable suggestions
+    if (hadConnectionRefused) {
+        diagnostics_.suggestions.push_back("Check that the camera is powered on and reachable on the network.");
+        diagnostics_.suggestions.push_back("Verify the IP address and port number in the URL.");
+    }
+    if (hadTimeout) {
+        diagnostics_.suggestions.push_back("The camera did not respond in time.");
+        diagnostics_.suggestions.push_back("Check firewall settings and network connectivity.");
+    }
+    if (hadAuth) {
+        diagnostics_.suggestions.push_back("The camera requires authentication. Include credentials in the URL:");
+        diagnostics_.suggestions.push_back("  rtsp://username:password@<ip>:<port>/path");
+    }
+    if (lastAttempt.failedAt == ConnectionStage::FindingStreamInfo) {
+        diagnostics_.suggestions.push_back("The camera may use a format that needs longer analysis time.");
+        diagnostics_.suggestions.push_back("Verify the stream works in VLC media player first.");
+    }
+    if (lastAttempt.failedAt == ConnectionStage::OpeningCodec) {
+        diagnostics_.suggestions.push_back("The video codec may not be supported by this build of FFmpeg.");
+    }
+    if (!triedTcp || !triedUdp) {
+        std::string untried = !triedUdp ? "UDP" : "TCP";
+        diagnostics_.suggestions.push_back("Try switching transport to " + untried + " using the [P] key.");
+    }
+    if (diagnostics_.url.find("rtsp://") != 0 && diagnostics_.url.find("rtp://") != 0 &&
+        diagnostics_.url.find("rtsps://") != 0) {
+        diagnostics_.suggestions.push_back("URL does not start with rtsp:// or rtp:// - check the URL format.");
+    }
+    diagnostics_.suggestions.push_back("Verify the stream path (common paths: /stream, /live, /Streaming/Channels/1).");
 }
 
 bool VideoDecoder::openCodec() {
