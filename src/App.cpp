@@ -696,7 +696,7 @@ void App::renderAboutPanel() {
     // App name
     renderTextCentered("Video Latency Test Tool", centerX, y, valueColor);
     y += lineHeight;
-    renderTextCentered("Version 1.0", centerX, y, labelColor);
+    renderTextCentered("Version 1.1.0", centerX, y, labelColor);
     y += lineHeight + 20;
 
     // Author

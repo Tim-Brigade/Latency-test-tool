@@ -7,7 +7,7 @@ echo ========================================
 echo.
 
 :: Set version (update this for releases)
-set VERSION=1.0.0
+set VERSION=1.1.0
 
 :: Create distribution folder name
 set DIST_NAME=LatencyTestTool-v%VERSION%-win64
@@ -48,17 +48,16 @@ echo.
 echo USAGE:
 echo   1. Run LatencyTestTool.exe
 echo   2. Press U to edit the RTSP URL, or press 1-9 to use a recent connection
-echo   3. Press C to connect to the stream
-echo   4. Press T to start the timestamp clock
-echo   5. Point your camera at the white timestamp display panel
-echo   6. Press SPACE to freeze the frame and measure latency
-echo   7. Compare the frozen time in the video to the clock panel
+echo   3. Press C to connect ^(the clock starts automatically^)
+echo   4. Point your camera at the white timestamp display panel
+echo   5. Press SPACE to freeze the frame and measure latency
+echo   6. Compare the frozen time in the video to the clock panel
 echo.
 echo KEYBOARD SHORTCUTS:
 echo   U     - Edit URL
 echo   C     - Connect to stream
 echo   D     - Disconnect
-echo   T     - Start/Stop clock
+echo   P     - Cycle transport protocol ^(Auto/TCP/UDP^)
 echo   SPACE - Freeze frame ^(measure latency^)
 echo   S     - Save screenshot
 echo   1-9   - Quick connect to recent URLs

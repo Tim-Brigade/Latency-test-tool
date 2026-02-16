@@ -107,7 +107,7 @@ To share the application with others who don't need to build from source:
 package.bat
 ```
 
-This creates `dist/LatencyTestTool-v1.0.0-win64.zip` containing the executable and all required DLLs.
+This creates `dist/LatencyTestTool-v1.1.0-win64.zip` containing the executable and all required DLLs.
 
 ### For Recipients
 
@@ -164,10 +164,12 @@ From the diagnostics panel you can press `P` to change transport protocol, `C` t
 - Ensure the camera supports RTSP
 
 ### "Font not found"
+
 - Download a TTF font and place it in `resources/fonts/`
 - Update the font path in `main.cpp` if using a different filename
 
 ### Build errors
+
 - Ensure Visual Studio C++ workload is installed
 - Run `build.bat` from a Developer Command Prompt if issues persist
 

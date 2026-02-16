@@ -1,6 +1,6 @@
 {
   "name": "latency-test-tool",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Video latency test tool for RTSP/RTP camera streams",
   "dependencies": [
     {
