@@ -48,8 +48,8 @@ struct StreamConfig {
     TransportProtocol transport = TransportProtocol::AUTO;
     int connectionTimeoutMs = 10000;
     int receiveTimeoutMs = 5000;
-    int probeSize = 524288;          // 512KB (reasonable for most cameras)
-    int analyzeDurationUs = 2000000; // 2 seconds
+    int probeSize = 131072;          // 128KB - enough for H.264 SPS/PPS detection
+    int analyzeDurationUs = 500000;  // 500ms - balanced for quick stream detection
 };
 
 struct TestConfig {

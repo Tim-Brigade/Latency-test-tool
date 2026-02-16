@@ -83,7 +83,7 @@ void TimestampDisplay::render(int x, int y, int width, int height, bool paused, 
     // Title at top - dark text on white background
     if (font_) {
         SDL_Color titleColor = running_ ? SDL_Color{0, 120, 60, 255} : SDL_Color{100, 100, 100, 255};
-        const char* title = paused ? "PAUSED" : (running_ ? "CLOCK RUNNING" : "PRESS [T] TO START");
+        const char* title = paused ? "PAUSED" : (running_ ? "CLOCK RUNNING" : "WAITING FOR CONNECTION");
         SDL_Surface* surface = TTF_RenderText_Blended(font_, title, titleColor);
         if (surface) {
             SDL_Texture* texture = SDL_CreateTextureFromSurface(renderer_, surface);

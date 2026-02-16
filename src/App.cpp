@@ -4,6 +4,11 @@
 #include <iomanip>
 #include <fstream>
 #include <algorithm>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 namespace latency {
 
@@ -203,14 +208,6 @@ void App::handleKeyDown(SDL_Keycode key) {
             if (state_ != AppState::Disconnected) disconnect();
             break;
 
-        case SDLK_t:
-            if (state_ == AppState::Connected) {
-                startClock();
-            } else if (state_ == AppState::Running) {
-                stopClock();
-            }
-            break;
-
         case SDLK_SPACE:
             if (state_ == AppState::Running || state_ == AppState::Connected) {
                 togglePause();
@@ -238,8 +235,6 @@ void App::handleKeyDown(SDL_Keycode key) {
                 showingAbout_ = false;
             } else if (paused_) {
                 togglePause();  // Unpause
-            } else if (state_ == AppState::Running) {
-                stopClock();
             } else {
                 appRunning_ = false;
             }
@@ -355,12 +350,8 @@ void App::renderUI() {
     int buttonY = 30;
 
     bool canConnect = state_ == AppState::Disconnected && !urlInputActive_;
-    bool canRun = (state_ == AppState::Connected || state_ == AppState::Running) && !urlInputActive_;
 
     renderButton(buttonX, buttonY, buttonWidth, 28, "[C]onnect", canConnect);
-    renderButton(buttonX + buttonWidth + 5, buttonY, buttonWidth, 28,
-                 state_ == AppState::Running ? "[T] Stop" : "[T] Start", canRun);
-    renderButton(buttonX + (buttonWidth + 5) * 2, buttonY, buttonWidth, 28, "[S]ave", true);
 
     // Separator line
     SDL_SetRenderDrawColor(renderer_, 60, 60, 70, 255);
@@ -456,24 +447,19 @@ void App::renderButton(int x, int y, int width, int height,
 }
 
 void App::renderPauseOverlay() {
-    // Semi-transparent overlay on video area
     int videoX = config_.timestampPanelWidth;
     int videoY = 75;
     int videoWidth = config_.windowWidth - videoX - 8;
     int videoHeight = config_.windowHeight - 110;
 
-    // Dark overlay
-    SDL_SetRenderDrawBlendMode(renderer_, SDL_BLENDMODE_BLEND);
-    SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 180);
-    SDL_Rect overlay = {videoX, videoY, videoWidth, videoHeight};
-    SDL_RenderFillRect(renderer_, &overlay);
+    // No dimming overlay - keep image clearly visible
 
-    // PAUSED text
+    // PAUSED text - top-left of video area so it doesn't obscure the centre
     SDL_Color red = {255, 80, 80, 255};
-    renderTextCentered("PAUSED", videoX + videoWidth / 2, videoY + videoHeight / 2 - 20, red);
+    renderText("PAUSED", videoX + 10, videoY + 10, red);
 
-    SDL_Color white = {255, 255, 255, 255};
-    renderTextCentered("[SPACE] to unpause  |  [S] screenshot", videoX + videoWidth / 2, videoY + videoHeight - 40, white);
+    SDL_Color white = {200, 200, 200, 255};
+    renderText("[SPACE] unpause | [S] screenshot", videoX + 10, videoY + 30, white);
 }
 
 void App::renderStatsPanel() {
@@ -488,7 +474,7 @@ void App::renderStatsPanel() {
     const int panelWidth = 280;
     const int lineHeight = 18;
     const int padding = 8;
-    int numLines = 11;
+    int numLines = 12;
     const int panelHeight = lineHeight * numLines + padding * 2;
     const int panelX = config_.windowWidth - panelWidth - padding;
     const int panelY = config_.windowHeight - 30 - panelHeight - padding;
@@ -527,6 +513,19 @@ void App::renderStatsPanel() {
     renderText("Accel:", labelX, y, labelColor);
     SDL_Color accelColor = stats.isHardwareAccelerated ? greenColor : yellowColor;
     renderText(stats.hwAccelType, valueX, y, accelColor);
+    y += lineHeight;
+
+    // Transport protocol (TCP/UDP)
+    renderText("Transport:", labelX, y, labelColor);
+    {
+        std::string protoStr = (videoDecoder_->getDetectedProtocol() == StreamProtocol::RTP) ? "RTP" : "RTSP";
+        const auto& diag = videoDecoder_->getConnectionDiagnostics();
+        std::string transportStr = "TCP";
+        if (!diag.attempts.empty()) {
+            transportStr = (diag.attempts.back().transport == TransportProtocol::UDP) ? "UDP" : "TCP";
+        }
+        renderText(protoStr + "/" + transportStr, valueX, y, valueColor);
+    }
     y += lineHeight;
 
     // Resolution
@@ -634,9 +633,6 @@ void App::renderHelpPanel() {
 
     // Test section
     renderText("LATENCY TEST:", panelX + padding, y, headerColor);
-    y += lineHeight;
-    renderText("T", panelX + padding + 20, y, keyColor);
-    renderText("Start/Stop timestamp clock", panelX + padding + 80, y, descColor);
     y += lineHeight;
     renderText("SPACE", panelX + padding + 20, y, keyColor);
     renderText("Freeze frame (measure latency)", panelX + padding + 80, y, descColor);
@@ -808,7 +804,7 @@ void App::renderStatusBar() {
             if (!diag.attempts.empty()) {
                 transportStr = (diag.attempts.back().transport == TransportProtocol::UDP) ? "UDP" : "TCP";
             }
-            statusText = "Connected [" + protoStr + "/" + transportStr + "] - T: start clock, D: disconnect";
+            statusText = "Connected [" + protoStr + "/" + transportStr + "] - D: disconnect";
             statusColor = {100, 200, 100, 255};
             break;
         }
@@ -817,7 +813,7 @@ void App::renderStatusBar() {
                 statusText = "PAUSED - SPACE: unpause, D: disconnect";
                 statusColor = {255, 100, 100, 255};
             } else {
-                statusText = "Running - SPACE: freeze, T: stop clock, D: disconnect";
+                statusText = "Running - SPACE: freeze, D: disconnect";
                 statusColor = {100, 150, 255, 255};
             }
             break;
@@ -878,6 +874,7 @@ void App::connect() {
     if (videoDecoder_->connect(streamConfig_)) {
         state_ = AppState::Connected;
         addToConnectionHistory(urlInput_);
+        startClock();  // Auto-start the clock on connection
     } else {
         state_ = AppState::Disconnected;
         showingDiagnostics_ = true;
@@ -997,7 +994,7 @@ void App::renderDiagnosticsPanel() {
     if (y < maxY) {
         std::string transportStr;
         switch (streamConfig_.transport) {
-            case TransportProtocol::AUTO: transportStr = "Auto (TCP then UDP)"; break;
+            case TransportProtocol::AUTO: transportStr = "Auto (UDP then TCP)"; break;
             case TransportProtocol::TCP: transportStr = "TCP only"; break;
             case TransportProtocol::UDP: transportStr = "UDP only"; break;
         }
@@ -1077,8 +1074,16 @@ void App::saveScreenshot() {
     auto time = std::chrono::system_clock::to_time_t(now);
     std::tm tm = *std::localtime(&time);
 
+    // Ensure screenshots directory exists
+    std::string screenshotDir = "screenshots";
+#ifdef _WIN32
+    _mkdir(screenshotDir.c_str());
+#else
+    mkdir(screenshotDir.c_str(), 0755);
+#endif
+
     std::ostringstream filename;
-    filename << "latency_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".bmp";
+    filename << screenshotDir << "/latency_" << std::put_time(&tm, "%Y%m%d_%H%M%S") << ".bmp";
 
     SDL_SaveBMP(surface, filename.str().c_str());
     SDL_FreeSurface(surface);

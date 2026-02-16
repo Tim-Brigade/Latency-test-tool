@@ -36,7 +36,7 @@ bool VideoDecoder::connect(const StreamConfig& config) {
     std::vector<TransportProtocol> transportsToTry;
     if (detectedProtocol_ == StreamProtocol::RTSP) {
         if (config.transport == TransportProtocol::AUTO) {
-            transportsToTry = { TransportProtocol::TCP, TransportProtocol::UDP };
+            transportsToTry = { TransportProtocol::UDP, TransportProtocol::TCP };
         } else {
             transportsToTry = { config.transport };
         }
@@ -144,6 +144,9 @@ bool VideoDecoder::tryConnect(const StreamConfig& config, TransportProtocol tran
         lastError_ = "Failed to find stream info: " + std::string(errBuf);
         return false;
     }
+
+    // Flush stale packets buffered during stream analysis
+    avformat_flush(formatCtx_);
 
     // Stage: Finding video stream
     attempt.failedAt = ConnectionStage::FindingVideoStream;
@@ -414,6 +417,11 @@ void VideoDecoder::decodeThread() {
         return;
     }
 
+    // For H.264/H.265, skip packets until the first keyframe so the decoder
+    // doesn't stall waiting for an IDR. MJPEG frames are all keyframes so
+    // this has no effect on MJPEG streams.
+    bool gotFirstKeyframe = false;
+
     while (running_) {
         // If paused, sleep and skip processing
         if (paused_) {
@@ -442,6 +450,16 @@ void VideoDecoder::decodeThread() {
         if (packet->stream_index != videoStreamIndex_) {
             av_packet_unref(packet);
             continue;
+        }
+
+        // Discard non-keyframe packets until we receive the first keyframe
+        if (!gotFirstKeyframe) {
+            if (packet->flags & AV_PKT_FLAG_KEY) {
+                gotFirstKeyframe = true;
+            } else {
+                av_packet_unref(packet);
+                continue;
+            }
         }
 
         // Measure decode time
