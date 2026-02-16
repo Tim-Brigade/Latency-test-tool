@@ -6,10 +6,12 @@ A Windows desktop application for measuring end-to-end video latency in RTSP/RTP
 
 - **Real-time timestamp display** - High-precision clock with 10ms resolution on white background (optimized for camera capture)
 - **RTSP/RTP stream support** - Connect to IP cameras and video encoders via FFmpeg
+- **Transport protocol selection** - Choose between Auto (UDP with TCP fallback), TCP-only, or UDP-only modes
+- **Connection diagnostics** - Detailed failure analysis with per-attempt info and troubleshooting suggestions
 - **Freeze-frame measurement** - Pause video to compare displayed time vs captured time
 - **Connection history** - Remembers recent connections for quick reconnection (keys 1-9)
-- **Decode statistics** - Real-time display of decoder performance, FPS, and frame timing
-- **Screenshot capture** - Document your test setup and results
+- **Decode statistics** - Real-time display of decoder performance, FPS, hardware acceleration, and transport protocol
+- **Screenshot capture** - Save timestamped screenshots to `screenshots/` directory
 
 ## How It Works
 
@@ -77,7 +79,7 @@ build\Release\LatencyTestTool.exe
 | `U` | Edit stream URL |
 | `C` | Connect to stream |
 | `D` | Disconnect from stream |
-| `T` | Start/Stop timestamp clock |
+| `P` | Cycle transport protocol (Auto/TCP/UDP) |
 | `SPACE` | Freeze frame to measure latency |
 | `S` | Save screenshot |
 | `1-9` | Quick connect to recent URLs |
@@ -89,12 +91,11 @@ build\Release\LatencyTestTool.exe
 
 1. Launch the application
 2. Press `U` and enter your camera's RTSP URL (e.g., `rtsp://192.168.1.100:554/stream`)
-3. Press `C` to connect
+3. Press `C` to connect — the timestamp clock starts automatically
 4. Position your camera to capture the white timestamp display panel
-5. Press `T` to start the clock
-6. Press `SPACE` to freeze the frame and compare times
-7. The frozen time shown in the video vs the clock panel shows the latency
-8. Press `S` to save a screenshot for documentation
+5. Press `SPACE` to freeze the frame and compare times
+6. The frozen time shown in the video vs the clock panel shows the latency
+7. Press `S` to save a screenshot for documentation
 
 ## Distribution
 
@@ -126,8 +127,6 @@ Latency-test-tool/
 │   ├── TimestampDisplay.cpp/h # Timestamp rendering
 │   ├── VideoDecoder.cpp/h    # FFmpeg video decoding
 │   ├── VideoRenderer.cpp/h   # SDL video rendering
-│   ├── LatencyMeasurer.cpp/h # Pattern detection & measurement
-│   ├── ResultsManager.cpp/h  # Results export
 │   └── Config.cpp/h          # Configuration
 ├── resources/
 │   └── fonts/                # TTF fonts
@@ -147,9 +146,21 @@ Managed via vcpkg:
 
 ## Troubleshooting
 
+### Connection diagnostics
+
+When a connection fails, a diagnostics panel appears automatically showing:
+
+- Details of each connection attempt (TCP and UDP)
+- The stage where the connection failed and FFmpeg error messages
+- Actionable suggestions to resolve the issue
+
+From the diagnostics panel you can press `P` to change transport protocol, `C` to retry, or `U` to edit the URL.
+
 ### "Failed to connect to stream"
+
+- Try cycling the transport protocol with `P` (Auto/TCP/UDP) — some cameras only support one protocol
 - Verify the RTSP URL is correct and accessible
-- Check firewall settings
+- Check firewall settings (UDP streams may need ports 6970-6999 open)
 - Ensure the camera supports RTSP
 
 ### "Font not found"
